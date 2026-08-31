@@ -1,0 +1,215 @@
+# Makefile.deps
+
+.DEFAULT_GOAL := all
+
+## Global variables
+
+# $(CURDIR) = MakefileFolder/libwebsockets_build
+ROOT_DIR    := $(CURDIR)/../..
+BUILD_BASE  := $(ROOT_DIR)/build/lws_deps
+SRC_DIR     := $(BUILD_BASE)/src
+BUILD_DIR   := $(BUILD_BASE)/obj
+
+
+## Platform detection
+## (Run uname, but should fallback to Windows)
+UNAME_S := $(shell uname -s 2>/dev/null || echo Windows)
+UNAME_M := $(shell uname -m 2>/dev/null || echo $(PROCESSOR_ARCHITECTURE))
+
+### OS Detection
+ifeq ($(UNAME_S),Linux)
+    OS_NAME := Linux
+else ifeq ($(UNAME_S),Darwin)
+    OS_NAME := Mac
+else ifneq (,$(findstring MINGW,$(UNAME_S)))
+    OS_NAME := Windows
+else ifneq (,$(findstring MSYS,$(UNAME_S)))
+    OS_NAME := Windows
+else ifneq (,$(findstring UCRT,$(UNAME_S)))
+    OS_NAME := Windows
+else
+    # fallback
+    ifeq ($(OS),Windows_NT)
+        OS_NAME := Windows
+    else
+        $(error Cannot detect platform. Use Windows MSYS2 MINGW32/MINGW64, Linux, or macOS.)
+    endif
+endif
+
+### Arch detection
+ifeq ($(OS_NAME),Windows)
+    ifeq ($(UNAME_M),x86_64)
+        ARCH ?= x64
+    else ifeq ($(UNAME_M),i686)
+        ARCH ?= x32
+    else ifeq ($(MSYSTEM),MINGW64)
+        ARCH ?= x64
+    else ifeq ($(MSYSTEM),MINGW32)
+        ARCH ?= x32
+    else ifeq ($(MSYSTEM),UCRT64)
+        ARCH ?= x64
+    # fallback
+    else ifeq ($(PROCESSOR_ARCHITECTURE),AMD64)
+        ARCH ?= x64
+    else ifeq ($(PROCESSOR_ARCHITECTURE),x86)
+        ARCH ?= x32
+    else
+        ARCH ?= x64
+    endif
+    OS_FOLDER := Windows-$(ARCH)
+    WINDOWS_BUILD := 1
+else
+    OS_FOLDER := $(OS_NAME)
+    WINDOWS_BUILD := 0
+endif
+
+### MINGW detection
+MINGW_BUILD := 0
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+    MINGW_BUILD := 1
+else ifneq (,$(findstring MSYS,$(UNAME_S)))
+    MINGW_BUILD := 1
+else ifneq (,$(findstring UCRT,$(UNAME_S)))
+    MINGW_BUILD := 1
+endif
+
+# Final clean install destination
+INSTALL_DIR := $(ROOT_DIR)/src/external/libwebsockets/$(OS_FOLDER)
+
+# CMake Flags
+CMAKE_FLAGS := -DCMAKE_INSTALL_PREFIX=$(INSTALL_DIR) \
+               -DBUILD_SHARED_LIBS=OFF \
+               -DCMAKE_BUILD_TYPE=Release
+
+# Windows XP SP3 Support Flag
+ifeq ($(OS_NAME),Windows)
+    # Force include poll.h to provide struct pollfd for Windows XP (MinGW)
+    # because winsock2.h only defines it for _WIN32_WINNT >= 0x0600 (Vista)
+    CMAKE_FLAGS += -DCMAKE_C_FLAGS="  -D_WIN32_WINNT=0x0501" \
+                   -DCMAKE_CXX_FLAGS="-D_WIN32_WINNT=0x0501"
+endif
+
+
+## BUILD PART
+
+
+all: zlib mbedtls nghttp2 libwebsockets
+
+zlib:
+	@mkdir -p $(SRC_DIR) $(BUILD_DIR)
+	@if [ ! -d "$(SRC_DIR)/zlib-src" ]; then \
+		git clone --depth 1 --branch v1.3.2 https://github.com/madler/zlib.git $(SRC_DIR)/zlib-src; \
+	fi
+	cmake -S $(SRC_DIR)/zlib-src -B $(BUILD_DIR)/zlib-build \
+		$(CMAKE_FLAGS) \
+		-DSKIP_INSTALL_SHARED_LIB=ON
+	cmake --build $(BUILD_DIR)/zlib-build --target install
+
+mbedtls:
+	@if [ ! -d "$(SRC_DIR)/mbedtls-src" ]; then \
+		git clone --depth 1 --branch v2.28.9 https://github.com/Mbed-TLS/mbedtls.git $(SRC_DIR)/mbedtls-src; \
+	fi
+
+	# Patch Windows MinGW: prevent Mbed TLS from importing _vsnprintf_s from msvcrt.dll
+	cmake \
+		-DMBEDTLS_MINGW_BUILD=$(MINGW_BUILD) \
+		-DMBEDTLS_SOURCE_DIR="$(SRC_DIR)/mbedtls-src" \
+		-P "$(ROOT_DIR)/src/external/patches/patch_mbedtls_windows_xp.cmake"
+
+	cmake -S $(SRC_DIR)/mbedtls-src -B $(BUILD_DIR)/mbedtls-build \
+		$(CMAKE_FLAGS) \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+		-DENABLE_PROGRAMS=OFF \
+		-DENABLE_TESTING=OFF
+	cmake --build $(BUILD_DIR)/mbedtls-build --target install
+
+nghttp2:
+	@if [ ! -d "$(SRC_DIR)/nghttp2-src" ]; then \
+		git clone --depth 1 --branch v1.70.0 https://github.com/nghttp2/nghttp2.git $(SRC_DIR)/nghttp2-src; \
+	fi
+	cmake -S $(SRC_DIR)/nghttp2-src -B $(BUILD_DIR)/nghttp2-build \
+		$(CMAKE_FLAGS) \
+		-DENABLE_LIB_ONLY=ON \
+		-DBUILD_STATIC_LIBS=ON \
+		-DENABLE_DOC=OFF \
+		-DBUILD_TESTING=OFF \
+		-DENABLE_FAILMALLOC=OFF \
+		-DWITH_OPENSSL=OFF \
+		-DWITH_LIBNGTCP2=OFF \
+		-DWITH_LIBNGHTTP3=OFF
+	cmake --build $(BUILD_DIR)/nghttp2-build --target install
+
+libwebsockets: zlib mbedtls nghttp2
+	@if [ ! -d "$(SRC_DIR)/lws-src" ]; then \
+		git clone --depth 1 --branch v4.3.10 https://github.com/warmcat/libwebsockets.git $(SRC_DIR)/lws-src; \
+	fi
+
+	# Patch hardcoded Windows 7 (0x0601) target to Windows XP (0x0501)
+	cmake \
+		-DLWS_WINDOWS_BUILD=$(WINDOWS_BUILD) \
+		-DLWS_SOURCE_DIR="$(SRC_DIR)/lws-src" \
+		-P "$(ROOT_DIR)/src/external/patches/patch_libwebsockets_windows_xp.cmake"
+
+	# Patch the v4.3 for Windows XP Compatibility
+	cmake \
+		-DLWS_WINDOWS_BUILD=$(WINDOWS_BUILD) \
+		-DLWS_SOURCE_DIR="$(SRC_DIR)/lws-src" \
+		-P "$(ROOT_DIR)/src/external/patches/patch_libwebsockets_windows_xp_source_compatibility.cmake"
+
+	# Patch the v4.3 authority bug (all OS)
+	cmake \
+		-DLWS_SOURCE_DIR="$(SRC_DIR)/lws-src" \
+		-P "$(ROOT_DIR)/src/external/patches/patch_libwebsockets_http2_authority.cmake"
+
+	# Patch the v4.3 about the relative redirect URL
+	cmake \
+		-DLWS_SOURCE_DIR="$(SRC_DIR)/lws-src" \
+		-P "$(ROOT_DIR)/src/external/patches/patch_libwebsockets_relative_redirect.cmake"
+
+  # HWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+	@tree ../..
+  # HWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+
+	cmake -S $(SRC_DIR)/lws-src -B $(BUILD_DIR)/lws-build \
+		$(CMAKE_FLAGS) \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+		-DCMAKE_PREFIX_PATH=$(INSTALL_DIR) \
+		-DDISABLE_WERROR=ON \
+		-DLWS_WITH_SSL=ON \
+		-DLWS_WITH_MBEDTLS=ON \
+		-DLWS_MBEDTLS_INCLUDE_DIRS="$(INSTALL_DIR)/include" \
+		-DLWS_MBEDTLS_LIBRARIES="$(INSTALL_DIR)/lib/libmbedtls.a;$(INSTALL_DIR)/lib/libmbedx509.a;$(INSTALL_DIR)/lib/libmbedcrypto.a" \
+		-DLWS_HAVE_mbedtls_ssl_conf_alpn_protocols=ON \
+		-DLWS_HAVE_mbedtls_ssl_get_alpn_protocol=ON \
+		-DLWS_WITH_ZLIB=ON \
+		-DLWS_WITH_BUNDLED_ZLIB=OFF \
+		-DLWS_ZLIB_INCLUDE_DIRS="$(INSTALL_DIR)/include" \
+		-DLWS_ZLIB_LIBRARIES="$(INSTALL_DIR)/lib/libzlibstatic.a" \
+		-DLWS_WITH_HTTP2=ON \
+		-DLWS_WITH_STATIC=ON \
+		-DLWS_WITH_SHARED=OFF \
+		-DLWS_WITHOUT_EXTENSIONS=OFF \
+		-DLWS_WITHOUT_TESTAPPS=ON \
+		-DLWS_WITHOUT_TEST_SERVER=ON \
+		-DLWS_WITHOUT_TEST_SERVER_EXTPOLL=ON \
+		-DLWS_WITHOUT_TEST_PING=ON \
+		-DLWS_WITHOUT_TEST_CLIENT=ON \
+		-DLWS_WITH_MINIMAL_EXAMPLES=OFF
+	cmake --build $(BUILD_DIR)/lws-build --target install
+
+
+## CLEAN PART
+
+clean-build:
+	@echo "Cleaning temporary build and source directories..."
+	rm -rf $(BUILD_BASE)
+
+clean-install:
+	@echo "Cleaning installed external libraries..."
+	rm -rf $(INSTALL_DIR)
+
+clean: clean-build clean-install
+	@echo "Full clean complete."
+
+.PHONY: all zlib mbedtls nghttp2 libwebsockets clean clean-build clean-install
+
