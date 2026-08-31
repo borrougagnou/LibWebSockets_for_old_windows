@@ -1,0 +1,127 @@
+name: Build libwebsockets
+
+on:
+  push:
+    branches: [ BUILD ]
+  pull_request:
+    branches: [ BUILD ]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  EXTERNAL_ROOT_REL: src/external
+  MAKEFILE_DEPS:     Makefile.deps
+
+jobs:
+  windows-mingw:
+    # https://github.com/actions/runner-images
+    strategy:
+      matrix:
+        include:
+          - os:      windows-2022
+            msystem: MINGW32
+            prefix:  mingw32
+            pkgarch: i686
+            name:    windows-x32-xp
+            arch:    x32
+
+          - os:      windows-2022
+            msystem: MINGW64
+            prefix:  mingw64
+            pkgarch: x86_64
+            name:    windows-x64
+            arch:    x64
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MinGW (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: true
+          install: >-
+            git
+            tree
+            make
+            mingw-w64-${{ matrix.msystem == 'mingw32' && 'i686' || 'x86_64' }}-gcc
+            mingw-w64-${{ matrix.msystem == 'mingw32' && 'i686' || 'x86_64' }}-cmake
+
+      - name: Build & Install (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          cd MakefileFolder/libwebsockets_build
+          make -f Makefile.deps all ARCH=${{ matrix.arch }}
+          cd ../..
+          tar -czf libwebsockets-${{ matrix.name }}.tar.gz $EXTERNAL_ROOT_REL/libwebsockets/
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libwebsockets-${{ matrix.name }}
+          path: libwebsockets-${{ matrix.name }}.tar.gz
+
+  unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os:           ubuntu-22.04
+            target:       linux
+            platform_dir: Linux
+            make_cmd:     make
+            artifact:     external-linux
+
+          - os:           macos-14
+            target:       macos
+            platform_dir: Mac
+            make_cmd:     gmake
+            artifact:     external-macos
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git \
+            tree \
+            make \
+            cmake \
+            pkg-config
+
+      - name: Install packages (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install \
+            git \
+            tree \
+            make \
+            cmake \
+            pkg-config
+
+      - name: Build & Install (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cd MakefileFolder/libwebsockets_build
+          make -f Makefile.deps all
+          cd ../..
+          tar -czf libwebsockets-${{ matrix.target }}.tar.gz $EXTERNAL_ROOT_REL/libwebsockets/
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libwebsockets-${{ matrix.target }}
+          path: libwebsockets-${{ matrix.target }}.tar.gz
+
+
