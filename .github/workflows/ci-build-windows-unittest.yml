@@ -1,0 +1,143 @@
+name: Windows Build unit_test
+
+on:
+  push:
+    branches: [ UNIT-TEST ]
+  pull_request:
+    branches: [ UNIT-TEST ]
+  workflow_dispatch:
+
+env:
+  PROGRAMS: "lws_lib_test"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  windows-mingw:
+    # https://github.com/actions/runner-images
+    strategy:
+      matrix:
+        include:
+          - os:      windows-2022
+            msystem: MINGW32
+            prefix:  mingw32
+            pkgarch: i686
+            name:    windows-x32-xp
+            arch:    x32
+
+          - os:      windows-2022
+            msystem: MINGW64
+            prefix:  mingw64
+            pkgarch: x86_64
+            name:    windows-x64
+            arch:    x64
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MinGW
+        id: setup_mingw
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: true
+          install: >-
+            git
+            tree
+            make
+            mingw-w64-${{ matrix.msystem == 'mingw32' && 'i686' || 'x86_64' }}-gcc
+            mingw-w64-${{ matrix.msystem == 'mingw32' && 'i686' || 'x86_64' }}-cmake
+
+      - name: Add MinGW to Windows PATH
+        shell: pwsh
+        run: |
+          $mingwBin = "${{ steps.setup_mingw.outputs.msys2-location }}\${{ matrix.msystem }}\bin"
+
+          Write-Host "MinGW bin: $mingwBin"
+
+          if (-not (Test-Path $mingwBin)) {
+            Write-Error "MinGW directory doesn't exist: $mingwBin"
+            exit 1
+          }
+
+          $mingwBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Verify MinGW
+        shell: pwsh
+        run: |
+          Write-Host "=== CMake ==="
+          Get-Command cmake
+          cmake --version
+
+          Write-Host "=== GCC ==="
+          Get-Command gcc
+          gcc --version
+
+          Write-Host "Compiler target:"
+          gcc -dumpmachine
+
+          Write-Host "=== G++ ==="
+          Get-Command g++
+          g++ --version
+
+      # Build
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          cmake -S . -B cmake-build `
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DARCH=${{ matrix.arch }}
+
+      - name: Verify CMake Configuration
+        shell: pwsh
+        run: |
+          Write-Host "=== CMake generator/compiler ==="
+
+          Select-String `
+            -Path "cmake-build\CMakeCache.txt" `
+            -Pattern "CMAKE_GENERATOR:|CMAKE_C_COMPILER:|CMAKE_CXX_COMPILER:"
+
+      - name: Build
+        shell: pwsh
+        run: |
+          foreach ($program in $env:PROGRAMS.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)) {
+            Write-Host "Building $program..."
+            cmake --build cmake-build --config Release --target $program
+
+            $exe = "cmake-build\${program}.exe"
+            if (-not (Test-Path $exe -PathType Leaf)) {
+              Write-Error "Executable not found: $exe"
+              Write-Host "Contents of cmake-build:"
+              Get-ChildItem -Recurse cmake-build
+              exit 1
+            }
+
+            Write-Host "Successfully built: $exe"
+          }
+
+      - name: Run executable
+        run: |
+          foreach ($exe in $env:PROGRAMS.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)) {
+            if (Test-Path ".\cmake-build\${exe}.exe") {
+              Write-Host "Running ${exe}"
+              & ".\cmake-build\${exe}.exe"
+              exit 0
+            }
+            else {
+              Write-Host "Executable not found: ${src}"
+              Write-Host "Contents of cmake-build:"
+              Get-ChildItem -Recurse .\cmake-build
+            }
+          }
+          exit 1
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: LWS_LIB_TEST-CMAKE-${{ matrix.name }}
+          path: |
+            cmake-build/lws_lib_test.exe
+            lws_lib_test.exe
+

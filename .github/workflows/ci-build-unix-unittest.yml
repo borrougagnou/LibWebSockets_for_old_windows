@@ -1,0 +1,138 @@
+name: Linux-Mac Build unit_test
+
+on:
+  push:
+    branches: [ UNIT-TEST ]
+  pull_request:
+    branches: [ UNIT-TEST ]
+  workflow_dispatch:
+
+env:
+  PROGRAMS: "lws_lib_test"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+#
+# MAKE BUILD
+#
+  make-build:
+    # https://github.com/actions/runner-images
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os:           ubuntu-22.04
+            target:       linux
+            platform_dir: Linux
+            make_cmd:     make
+            artifact:     external-linux
+
+          - os:           macos-14
+            target:       macos
+            platform_dir: Mac
+            make_cmd:     gmake
+            artifact:     external-macos
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # Install deps
+    - name: Install libusb (Linux)
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev
+
+    # Build
+    - name: Build
+      run: |
+        for program in $PROGRAMS; do
+          echo "Building $program..."
+          make $program
+        done
+
+    # Execute (|| true to prevent the program fail if no HID device is connected)
+    - name: Run executable
+      run: |
+        for bin in $PROGRAMS; do
+          echo "Running $bin"
+          ./$bin || true
+        done
+
+    - name: Upload binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: LWS_LIB_TEST-MAKE-${{ runner.os }}
+        path: |
+          lws_lib_test
+
+
+#
+# CMAKE BUILD
+#
+  cmake-build:
+    # https://github.com/actions/runner-images
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os:           ubuntu-22.04
+            target:       linux
+            platform_dir: Linux
+            artifact:     external-linux
+
+          - os:           macos-14
+            target:       macos
+            platform_dir: Mac
+            artifact:     external-macos
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # Install deps
+    - name: Install libusb (Linux)
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev
+
+    # Build
+    - name: Configure CMake
+      run: cmake -S . -B cmake-build
+
+    - name: Build
+      run: |
+        for program in $PROGRAMS; do
+          echo "Building $program..."
+          cmake --build cmake-build --config Release --target "$program"
+
+          exe="cmake-build/$program"
+          if [ ! -f "$exe" ]; then
+            echo "Executable not found: $exe"
+            echo "Contents of cmake-build:"
+            find cmake-build -type f
+            exit 1
+          fi
+          echo "Successfully built: $exe"
+        done
+
+    # Execute (|| true to prevent the program fail if no HID device is connected)
+    - name: Run executable
+      run: |
+        for bin in $PROGRAMS; do
+          echo "Running $bin"
+          ./cmake-build/$bin || true
+        done
+
+    - name: Upload binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: LWS_LIB_TEST-CMAKE-${{ runner.os }}
+        path: |
+          cmake-build/lws_lib_test
+          lws_lib_test
+
