@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  PROGRAMS: "lws_lib_test"
+  PROGRAMS: "lws_lib_test lws_lib_test_compression"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -140,4 +140,6 @@ jobs:
           path: |
             cmake-build/lws_lib_test.exe
             lws_lib_test.exe
+            cmake-build/lws_lib_test_compression.exe
+            lws_lib_test_compression.exe
 
