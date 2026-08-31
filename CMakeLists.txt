@@ -63,13 +63,15 @@ if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 endif()
 
 # TEST LibWebSockets Test Program
-add_executable(lws_lib_test src/unit_test/test_libwebsockets_lib.cpp)
+add_executable(lws_lib_test             src/unit_test/test_libwebsockets_lib.cpp)
+add_executable(lws_lib_test_compression src/unit_test/test_libwebsockets_lib_with_compression.cpp)
 
 ### Lib by Program ----------------
 
 # Programs who need LibWebSockets
 set(LWS_PROGRAMS
 	lws_lib_test
+	lws_lib_test_compression
 )
 
 ### Lib config ----------------
